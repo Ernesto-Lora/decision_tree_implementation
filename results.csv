@@ -1,0 +1,7 @@
+experiment,accuracy
+gini__cost_complexity,0.9354838709677419
+gini__reduced_error,0.9354838709677419
+information_gain__cost_complexity,0.9354838709677419
+information_gain__reduced_error,0.9354838709677419
+chi_square__cost_complexity,0.8709677419354839
+chi_square__reduced_error,0.8709677419354839

@@ -5,8 +5,7 @@ from math import log2
 from scipy.stats import chi2
 
 class DecisionTreeID3:
-    def __init__(self, split_criterion='information_gain',
-                  prune_method=None, max_depth=None, min_samples_split=2, chi_threshold=0.05):
+    def __init__(self, split_criterion='information_gain', prune_method=None, max_depth=None, min_samples_split=2, chi_threshold=0.05):
         """
         Constructor de la clase DecisionTreeID3.
         
@@ -94,7 +93,99 @@ class DecisionTreeID3:
         else:
             raise ValueError(f"Criterio de división no válido: {self.split_criterion}")
 
+    def _select_feature_by_gini(self, dataset, features):
+        """
+        Selecciona el atributo con menor índice de Gini.
+        """
+        target = dataset.columns[-1]
+        min_gini = float('inf')
+        best_feature = None
+        
+        for feature in features:
+            gini = 0
+            for value in dataset[feature].unique():
+                subset = dataset[dataset[feature] == value]
+                if len(subset) == 0:
+                    continue
+                    
+                # Calcular Gini para el subconjunto
+                class_counts = subset[target].value_counts()
+                subset_gini = 1
+                for count in class_counts:
+                    subset_gini -= (count / len(subset)) ** 2
+                    
+                # Ponderar por el tamaño del subconjunto
+                gini += (len(subset) / len(dataset)) * subset_gini
+                
+            if gini < min_gini:
+                min_gini = gini
+                best_feature = feature
+                
+        return best_feature
 
+    def _select_feature_by_information_gain(self, dataset, features):
+        """
+        Selecciona el atributo con mayor ganancia de información.
+        """
+        target = dataset.columns[-1]
+        max_gain = -float('inf')
+        best_feature = None
+        
+        # Calcular entropía del conjunto completo
+        total_entropy = self._calculate_entropy(dataset[target])
+        
+        for feature in features:
+            info_gain = total_entropy
+            for value in dataset[feature].unique():
+                subset = dataset[dataset[feature] == value]
+                if len(subset) == 0:
+                    continue
+                    
+                # Calcular entropía del subconjunto y ponderar
+                subset_entropy = self._calculate_entropy(subset[target])
+                info_gain -= (len(subset) / len(dataset)) * subset_entropy
+                
+            if info_gain > max_gain:
+                max_gain = info_gain
+                best_feature = feature
+                
+        return best_feature
+
+    def _select_feature_by_chi_square(self, dataset, features):
+        """
+        Selecciona el atributo con mayor significancia estadística (chi-cuadrado).
+        """
+        target = dataset.columns[-1]
+        max_chi = -float('inf')
+        best_feature = None
+        
+        for feature in features:
+            # Crear tabla de contingencia
+            contingency_table = pd.crosstab(dataset[feature], dataset[target])
+            
+            # Calcular estadístico chi-cuadrado
+            chi2_stat, p_value, _, _ = chi2_contingency(contingency_table)
+            
+            # Verificar si es significativo y mejor que el actual
+            if p_value < self.chi_threshold and chi2_stat > max_chi:
+                max_chi = chi2_stat
+                best_feature = feature
+                
+        return best_feature
+
+    def _calculate_entropy(self, target_series):
+        """
+        Calcula la entropía de una serie de etiquetas.
+        """
+        counts = target_series.value_counts()
+        entropy = 0
+        total = len(target_series)
+        
+        for count in counts:
+            probability = count / total
+            entropy -= probability * log2(probability)
+            
+        return entropy
 
     def _cost_complexity_prune(self):
         """
@@ -139,50 +230,43 @@ class DecisionTreeID3:
 
     def _reduced_error_prune(self, X, y):
         """
-        Realiza poda por error reducido usando el conjunto de validación.
+        Perform reduced error pruning using a validation set.
         """
-        # Convertir X a DataFrame si no lo es
+        # Ensure X is a DataFrame and y is a Series
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
-            
-        # Crear copia del árbol para podar
+        if isinstance(y, pd.DataFrame):
+            y = y.squeeze()  # Convert to Series if it's a 1-column DataFrame
+
+        # Create a copy of the tree for pruning
         pruned_tree = self._copy_tree(self.root)
-        
-        # Obtener todos los nodos no-hoja en post-order
+
+        # Get all non-leaf nodes in post-order traversal
         nodes = self._get_non_leaf_nodes_post_order(pruned_tree)
-        
+
         for node in nodes:
-            # Guardar la sub-rama actual
-            original_children = node['children'].copy()
-            
-            # Convertir este nodo en hoja con la clase mayoritaria
-            predictions = []
-            for _, row in X.iterrows():
-                predictions.append(self._predict_single(row, pruned_tree))
-                
-            current_accuracy = sum(predictions == y) / len(y)
-            
-            # Crear nodo hoja con la clase mayoritaria
+            # Backup current subtree
+            original_children = node.get('children', {}).copy()
+
+            # Evaluate current tree accuracy
+            predictions = [self._predict_single(row, pruned_tree) for _, row in X.iterrows()]
+            current_accuracy = np.mean(np.array(predictions) == np.array(y))
+
+            # Prune: Replace node with majority class
             majority_class = Counter(predictions).most_common(1)[0][0]
             node_copy = node.copy()
             node.clear()
             node['label'] = majority_class
-            
-            # Calcular nueva precisión
-            new_predictions = []
-            for _, row in X.iterrows():
-                new_predictions.append(self._predict_single(row, pruned_tree))
-                
-            new_accuracy = sum(new_predictions == y) / len(y)
-            
-            # Si no mejora, restaurar la rama original
+
+            # Evaluate pruned tree accuracy
+            new_predictions = [self._predict_single(row, pruned_tree) for _, row in X.iterrows()]
+            new_accuracy = np.mean(np.array(new_predictions) == np.array(y))
+
+            # Revert pruning if accuracy didn't improve
             if new_accuracy <= current_accuracy:
                 node.clear()
                 node.update(node_copy)
-            # Si mejora, dejar el nodo como hoja
-            else:
-                pass
-                
+
         self.root = pruned_tree
 
     def _copy_tree(self, node):
